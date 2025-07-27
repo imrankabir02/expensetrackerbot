@@ -66,30 +66,54 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @requires_auth
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+    text = update.message.text.strip()
     user_id = str(update.effective_user.id)
+
+    session = Session()
 
     try:
         parts = text.lower().split()
+
+        # Case 1: "spent 120 on groceries"
         if "spent" in parts:
             idx = parts.index("spent")
             amount = float(parts[idx + 1])
             category = parts[idx + 3] if len(parts) > idx + 3 else "misc"
 
-            session = Session()
-            expense = Expense(
-                user_id=user_id,
-                amount=amount,
-                category=category,
-                description=text
-            )
-            session.add(expense)
-            session.commit()
-            await update.message.reply_text(f"✅ Saved: {amount} BDT on {category}")
+        # Case 2: "groceries 120" or "groceries 120.5"
+        elif len(parts) == 2:
+            try:
+                # Assume category comes first, then amount
+                category = parts[0]
+                amount = float(parts[1])
+            except ValueError:
+                raise ValueError("Invalid input format.")
+
         else:
-            await update.message.reply_text("⚠️ Use: `Spent 100 on food`", parse_mode="Markdown")
-    except:
-        await update.message.reply_text("❌ Invalid format. Try: `Spent 100 on food`", parse_mode="Markdown")
+            await update.message.reply_text(
+                "⚠️ Please use: `Spent 100 on food` or `food 100`",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Save the expense
+        expense = Expense(
+            user_id=user_id,
+            amount=amount,
+            category=category,
+            description=text
+        )
+        session.add(expense)
+        session.commit()
+
+        await update.message.reply_text(f"✅ Saved: {amount} BDT on {category}")
+
+    except Exception as e:
+        print(f"[Error] {e}")
+        await update.message.reply_text(
+            "❌ Invalid format. Try: `Spent 100 on food` or `food 100`",
+            parse_mode="Markdown"
+        )
 
 @requires_auth
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
