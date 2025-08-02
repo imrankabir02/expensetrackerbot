@@ -240,7 +240,12 @@ async def add_expense_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         categories = session.query(Category).filter_by(user_id=user_id).all()
         if not categories:
-            await update.message.reply_text("You have no categories. Add one with /addcategory or type an expense directly.")
+            keyboard = [[InlineKeyboardButton("Add Category", switch_inline_query_current_chat="/addcategory ")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                "You have no custom categories. Add one with the button below or type an expense directly.",
+                reply_markup=reply_markup
+            )
             return
 
         keyboard = []
@@ -304,7 +309,12 @@ async def add_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     category_name = " ".join(context.args).strip()
     if not category_name:
-        await update.message.reply_text("Usage: /addcategory <name>")
+        keyboard = [[InlineKeyboardButton("Add Category", switch_inline_query_current_chat="/addcategory ")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Usage: /addcategory <name>",
+            reply_markup=reply_markup
+        )
         return
 
     session = Session()
@@ -326,7 +336,12 @@ async def remove_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     category_name = " ".join(context.args).strip()
     if not category_name:
-        await update.message.reply_text("Usage: /removecategory <name>")
+        keyboard = [[InlineKeyboardButton("Remove Category", switch_inline_query_current_chat="/removecategory ")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Usage: /removecategory <name>",
+            reply_markup=reply_markup
+        )
         return
 
     session = Session()
