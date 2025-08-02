@@ -24,6 +24,13 @@ class User(Base):
     __tablename__ = 'users'
     telegram_id = Column(String, primary_key=True)
     pin = Column(String, nullable=True)
+    session_active = Column(Boolean, default=False)  # 🆕 Add this line
+
+class Category(Base):
+    __tablename__ = 'categories'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String)
+    name = Column(String)
 
 # ✅ Setup database engine and session
 engine = create_engine('sqlite:///expenses.db')

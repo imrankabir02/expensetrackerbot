@@ -1,6 +1,6 @@
-from telegram import Update, InputFile
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-from models import Expense, Session, Reminder
+from telegram import Update, InputFile, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
+from models import Expense, Session, Reminder, User, Category
 from datetime import date, timedelta
 from auth import is_authenticated, authenticate_user, logout_user, register_user
 from auth_decorator import requires_auth
@@ -8,21 +8,34 @@ from io import StringIO, BytesIO
 import matplotlib.pyplot as plt
 import csv
 from apscheduler.schedulers.background import BackgroundScheduler
+from config import TOKEN
 
-TOKEN = "8298302907:AAEh16HAggOwbVlVN59KuJ5C3tCBQoMSDyU"
+# async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     await update.message.reply_text(
+#         "👋 Welcome to *Expense Tracker Bot*!\n\n"
+#         "💸 Track your spending.\n"
+#         "✅ Type: `Spent 120 on groceries`\n"
+#         "ℹ️ Type /help to see all commands.",
+#         parse_mode="Markdown"
+#     )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Welcome to *Expense Tracker Bot*!\n\n"
-        "💸 Track your spending.\n"
-        "✅ Type: `Spent 120 on groceries`\n"
-        "ℹ️ Type /help to see all commands.",
-        parse_mode="Markdown"
+        "💸 Track your expenses easily.\n"
+        "🔐 Please register or login to start.\n\n"
+        "Use `/help` to see all commands.",
+        parse_mode="Markdown",
+        reply_markup=main_menu()  # 🆕 Show buttons
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📚 *Expense Tracker Guide*\n\n"
+        "🔐 *Auth:*\n"
+        "`/register <pin>`\n"
+        "`/login <pin>`\n"
+        "`/logout`\n\n"
         "💸 *Add Expenses:*\n"
         "`Spent 120 on groceries`\n"
         "`Spent 50 on transport`\n\n"
@@ -32,10 +45,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/export today|week|month|all`\n\n"
         "🔔 *Daily Reminder:*\n"
         "`/reminder on|off`\n\n"
-        "🔐 *Auth:*\n"
-        "`/register <pin>`\n"
-        "`/login <pin>`\n"
-        "`/logout`",
+        "🗑️ *Delete Expense:*\n"
+        "`/delete` - Shows your last 5 expenses to delete.\n\n"
+        "🗂️ *Manage Categories:*\n"
+        "`/addcategory <name>`\n"
+        "`/removecategory <name>`\n"
+        "`/categories`",
         parse_mode="Markdown"
     )
 
@@ -46,7 +61,24 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❗Usage: `/register 1234`", parse_mode="Markdown")
         return
     register_user(user_id, pin)
-    await update.message.reply_text("✅ Registered! Now login: `/login 1234`", parse_mode="Markdown")
+    
+    keyboard = [[InlineKeyboardButton("Login", switch_inline_query_current_chat="/login ")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "✅ Registered! Now click the button to login.",
+        reply_markup=reply_markup
+    )
+
+# async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     user_id = str(update.effective_user.id)
+#     pin = context.args[0] if context.args else None
+#     if not pin:
+#         await update.message.reply_text("❗Usage: `/login 1234`", parse_mode="Markdown")
+#         return
+#     if authenticate_user(user_id, pin):
+#         await update.message.reply_text("🔓 Login successful!")
+#     else:
+#         await update.message.reply_text("❌ Incorrect PIN.")
 
 async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -55,79 +87,294 @@ async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❗Usage: `/login 1234`", parse_mode="Markdown")
         return
     if authenticate_user(user_id, pin):
-        await update.message.reply_text("🔓 Login successful!")
+        await update.message.reply_text("🔓 Login successful!", reply_markup=main_menu())  # 🆕 Show buttons
     else:
         await update.message.reply_text("❌ Incorrect PIN.")
+
+# async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     user_id = str(update.effective_user.id)
+#     logout_user(user_id)
+#     await update.message.reply_text("🔒 Logged out.")
 
 async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     logout_user(user_id)
-    await update.message.reply_text("🔒 Logged out.")
+    await update.message.reply_text(
+        "🔒 Logged out.",
+        reply_markup=ReplyKeyboardRemove()  # 🆕 Remove buttons
+    )
 
 @requires_auth
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     user_id = str(update.effective_user.id)
-
     session = Session()
 
     try:
-        parts = text.lower().split()
+        # --- Button Handlers ---
+        if text == "📊 Report":
+            await update.message.reply_text("📊 Choose report range:", reply_markup=report_menu())
+            return
+        elif text == "📈 Chart":
+            await update.message.reply_text("📈 Choose chart range:", reply_markup=chart_menu())
+            return
+        elif text == "📂 Export":
+            await update.message.reply_text("📂 Choose export range:", reply_markup=export_menu())
+            return
+        elif text == "🔔 Reminder On":
+            context.args = ["on"]
+            await toggle_reminder(update, context)
+            return
+        elif text == "🔕 Reminder Off":
+            context.args = ["off"]
+            await toggle_reminder(update, context)
+            return
+        elif text == "🔐 Logout":
+            await logout(update, context)
+            return
+        elif text == "💸 Add Expense":
+            await add_expense_prompt(update, context)
+            return
+        elif text == "🗑️ Delete Expense":
+            await delete_expense_prompt(update, context)
+            return
+        elif text == "⬅️ Back":
+            await update.message.reply_text("🏠 Main menu:", reply_markup=main_menu())
+            return
+        elif text.startswith("Report "):
+            period = text.split(" ")[1].lower()
+            context.args = [period]
+            await report(update, context)
+            return
+        elif text.startswith("Chart "):
+            period = text.split(" ")[1].lower()
+            context.args = [period]
+            await chart(update, context)
+            return
+        elif text.startswith("Export "):
+            period = text.split(" ")[1].lower()
+            context.args = [period]
+            await export_expenses(update, context)
+            return
 
-        # Case 1: "spent 120 on groceries"
-        if "spent" in parts:
-            idx = parts.index("spent")
-            amount = float(parts[idx + 1])
-            category = parts[idx + 3] if len(parts) > idx + 3 else "misc"
-
-        # Case 2: "groceries 120" or "groceries 120.5"
-        elif len(parts) == 2:
+        # --- Expense Parsing ---
+        if context.user_data.get('selected_category'):
             try:
-                # Assume category comes first, then amount
-                category = parts[0]
-                amount = float(parts[1])
+                amount = float(text)
+                category = context.user_data.pop('selected_category')
+                
+                expense = Expense(
+                    user_id=user_id,
+                    amount=amount,
+                    category=category,
+                    description=f"{category} {amount}"
+                )
+                session.add(expense)
+                session.commit()
+                await update.message.reply_text(f"✅ Saved: {amount:.2f} BDT on {category}")
             except ValueError:
-                raise ValueError("Invalid input format.")
+                await update.message.reply_text("Please enter a valid amount.")
+            finally:
+                if 'selected_category' in context.user_data:
+                    del context.user_data['selected_category']
+            return
 
-        else:
+        text_lower = text.lower()
+        parts = text_lower.split()
+        amount = None
+        category = None
+
+        try:
+            if "spent" in parts:
+                idx = parts.index("spent")
+                amount = float(parts[idx + 1])
+                if "on" in parts:
+                    on_idx = parts.index("on")
+                    category = " ".join(parts[on_idx + 1:]) if len(parts) > on_idx + 1 else "misc"
+                else:
+                    category = "misc"
+            elif len(parts) >= 2:
+                try:
+                    amount = float(parts[-1])
+                    category = " ".join(parts[:-1])
+                except ValueError:
+                    amount = float(parts[0])
+                    category = " ".join(parts[1:])
+            
+            if not category:
+                category = "misc"
+
+        except (ValueError, IndexError):
             await update.message.reply_text(
-                "⚠️ Please use: `Spent 100 on food` or `food 100`",
+                "⚠️ Invalid format. Please use:\n`Spent 100 on food` or `food 100`",
                 parse_mode="Markdown"
             )
             return
 
-        # Save the expense
-        expense = Expense(
-            user_id=user_id,
-            amount=amount,
-            category=category,
-            description=text
-        )
-        session.add(expense)
-        session.commit()
-
-        await update.message.reply_text(f"✅ Saved: {amount} BDT on {category}")
+        if amount is not None and category is not None and category.strip() != "":
+            expense = Expense(
+                user_id=user_id,
+                amount=amount,
+                category=category.strip(),
+                description=text
+            )
+            session.add(expense)
+            session.commit()
+            await update.message.reply_text(f"✅ Saved: {amount:.2f} BDT on {category.strip()}")
+        else:
+            await update.message.reply_text(
+                "⚠️ Could not understand. Please use:\n`Spent 100 on food` or `food 100`",
+                parse_mode="Markdown"
+            )
 
     except Exception as e:
-        print(f"[Error] {e}")
-        await update.message.reply_text(
-            "❌ Invalid format. Try: `Spent 100 on food` or `food 100`",
-            parse_mode="Markdown"
-        )
+        print(f"[Error] handle_message: {e}")
+        await update.message.reply_text("❌ An unexpected error occurred. Please try again.")
+    finally:
+        session.close()
+
+@requires_auth
+async def add_expense_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    session = Session()
+    try:
+        categories = session.query(Category).filter_by(user_id=user_id).all()
+        if not categories:
+            await update.message.reply_text("You have no categories. Add one with /addcategory or type an expense directly.")
+            return
+
+        keyboard = []
+        for cat in categories:
+            keyboard.append([InlineKeyboardButton(cat.name, callback_data=f"category_{cat.name}")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Select a category:", reply_markup=reply_markup)
+    finally:
+        session.close()
+
+@requires_auth
+async def delete_expense_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    session = Session()
+    try:
+        expenses = session.query(Expense).filter_by(user_id=user_id).order_by(Expense.date.desc()).limit(5).all()
+        if not expenses:
+            await update.message.reply_text("No recent expenses to delete.")
+            return
+
+        keyboard = []
+        for exp in expenses:
+            button_text = f"❌ {exp.date}: {exp.amount:.2f} - {exp.category}"
+            callback_data = f"delete_{exp.id}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Select an expense to delete:", reply_markup=reply_markup)
+    finally:
+        session.close()
+
+@requires_auth
+async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data.startswith("delete_"):
+        expense_id = int(query.data.split("_")[1])
+        session = Session()
+        try:
+            expense = session.query(Expense).filter_by(id=expense_id).first()
+            if expense:
+                session.delete(expense)
+                session.commit()
+                await query.edit_message_text(text=f"✅ Expense {expense_id} deleted.")
+            else:
+                await query.edit_message_text(text="❌ Expense not found.")
+        except Exception as e:
+            print(f"[Error] handle_callback_query: {e}")
+            await query.edit_message_text(text="❌ Error deleting expense.")
+        finally:
+            session.close()
+    elif query.data.startswith("category_"):
+        category_name = query.data.split("_", 1)[1]
+        context.user_data['selected_category'] = category_name
+        await query.edit_message_text(text=f"How much did you spend on '{category_name}'?")
+
+@requires_auth
+async def add_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    category_name = " ".join(context.args).strip()
+    if not category_name:
+        await update.message.reply_text("Usage: /addcategory <name>")
+        return
+
+    session = Session()
+    try:
+        exists = session.query(Category).filter_by(user_id=user_id, name=category_name).first()
+        if exists:
+            await update.message.reply_text(f"Category '{category_name}' already exists.")
+            return
+        
+        new_category = Category(user_id=user_id, name=category_name)
+        session.add(new_category)
+        session.commit()
+        await update.message.reply_text(f"✅ Category '{category_name}' added.")
+    finally:
+        session.close()
+
+@requires_auth
+async def remove_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    category_name = " ".join(context.args).strip()
+    if not category_name:
+        await update.message.reply_text("Usage: /removecategory <name>")
+        return
+
+    session = Session()
+    try:
+        category = session.query(Category).filter_by(user_id=user_id, name=category_name).first()
+        if category:
+            session.delete(category)
+            session.commit()
+            await update.message.reply_text(f"🗑️ Category '{category_name}' removed.")
+        else:
+            await update.message.reply_text(f"Category '{category_name}' not found.")
+    finally:
+        session.close()
+
+@requires_auth
+async def list_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    session = Session()
+    try:
+        categories = session.query(Category).filter_by(user_id=user_id).all()
+        if not categories:
+            await update.message.reply_text("You have no custom categories. Add one with /addcategory <name>.")
+            return
+        
+        message = "Your categories:\n"
+        for cat in categories:
+            message += f"- {cat.name}\n"
+        await update.message.reply_text(message)
+    finally:
+        session.close()
+        
+def get_date_range(period: str) -> tuple[date, str]:
+    today = date.today()
+    if period == "today":
+        return today, "Today's"
+    elif period == "month":
+        return today.replace(day=1), "Monthly"
+    elif period == "week":
+        return today - timedelta(days=7), "Weekly"
+    else: # Default to week
+        return today - timedelta(days=7), "Weekly"
 
 @requires_auth
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     session = Session()
-    today = date.today()
     cmd = (context.args[0] if context.args else "week").lower()
-
-    if cmd == "today":
-        start_date, label = today, "Today's"
-    elif cmd == "month":
-        start_date, label = today.replace(day=1), "Monthly"
-    else:
-        start_date, label = today - timedelta(days=7), "Weekly"
+    start_date, label = get_date_range(cmd)
 
     expenses = session.query(Expense).filter(Expense.user_id == user_id, Expense.date >= start_date).all()
     if not expenses:
@@ -150,19 +397,10 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def export_expenses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     session = Session()
-    today = date.today()
     cmd = (context.args[0] if context.args else "all").lower()
 
-    if cmd == "today":
-        start_date = today
-    elif cmd == "week":
-        start_date = today - timedelta(days=7)
-    elif cmd == "month":
-        start_date = today.replace(day=1)
-    else:
-        start_date = None
-
-    if start_date:
+    if cmd != "all":
+        start_date, _ = get_date_range(cmd)
         expenses = session.query(Expense).filter(Expense.user_id == user_id, Expense.date >= start_date).all()
     else:
         expenses = session.query(Expense).filter(Expense.user_id == user_id).all()
@@ -188,15 +426,8 @@ async def export_expenses(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     session = Session()
-    today = date.today()
     cmd = (context.args[0] if context.args else "week").lower()
-
-    if cmd == "today":
-        start_date, label = today, "Today's"
-    elif cmd == "month":
-        start_date, label = today.replace(day=1), "Monthly"
-    else:
-        start_date, label = today - timedelta(days=7), "Weekly"
+    start_date, label = get_date_range(cmd)
 
     expenses = session.query(Expense).filter(Expense.user_id == user_id, Expense.date >= start_date).all()
     if not expenses:
@@ -248,8 +479,56 @@ async def send_daily_reminders(app):
         except Exception as e:
             print(f"Failed to message {r.user_id}: {e}")
 
+
+def main_menu():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            ["💸 Add Expense", "📊 Report"],
+            ["📈 Chart", "📂 Export"],
+            ["🗑️ Delete Expense", "🔔 Reminder On"],
+            ["🔕 Reminder Off", "🔐 Logout"]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False
+    )
+    
+def report_menu():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            ["Report Today", "Report Week", "Report Month"],
+            ["⬅️ Back"]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
+def chart_menu():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            ["Chart Today", "Chart Week", "Chart Month"],
+            ["⬅️ Back"]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
+def export_menu():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            ["Export Today", "Export Week", "Export Month", "Export All"],
+            ["⬅️ Back"]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
+    
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
+    
+    session = Session()
+    session.query(User).update({User.session_active: False})
+    session.commit()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
@@ -261,6 +540,11 @@ def main():
     app.add_handler(CommandHandler("export", export_expenses))
     app.add_handler(CommandHandler("chart", chart))
     app.add_handler(CommandHandler("reminder", toggle_reminder))
+    app.add_handler(CommandHandler("delete", delete_expense_prompt))
+    app.add_handler(CallbackQueryHandler(handle_callback_query))
+    app.add_handler(CommandHandler("addcategory", add_category))
+    app.add_handler(CommandHandler("removecategory", remove_category))
+    app.add_handler(CommandHandler("categories", list_categories))
 
     print("🚀 Bot is running...")
     scheduler = BackgroundScheduler()
