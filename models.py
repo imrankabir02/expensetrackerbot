@@ -2,6 +2,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, Date, Bool
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import date
+from config import DATABASE_URL
 
 Base = declarative_base()
 
@@ -33,6 +34,6 @@ class Category(Base):
     name = Column(String)
 
 # ✅ Setup database engine and session
-engine = create_engine('sqlite:///expenses.db')
-Base.metadata.create_all(engine)  # ✅ Now creates all 3 tables: expenses, reminders, users
+engine = create_engine(DATABASE_URL)
+Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
